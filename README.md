@@ -1,71 +1,60 @@
+# 👤 New-ADAccounts (SysOps)
 
-# 👤 New-ADAccounts
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1-blue?logo=powershell) ![Active Directory](https://img.shields.io/badge/ActiveDirectory-Module-green) ![v0.2](https://img.shields.io/badge/wersja-0.2-e45959)
 
-![PowerShell](https://img.shields.io/badge/PowerShell-5.1-blue?logo=powershell) ![Active Directory](https://img.shields.io/badge/ActiveDirectory-Module-green) ![v0.1](https://img.shields.io/badge/wersja-0.1-e45959)
-
-To repozytorium zawiera pierwszą, prototypową wersję rozwiązania do zautomatyzowanego tworzenia kont w środowisku Active Directory, połączoną z konfiguracją katalogów domowych na serwerze plików.
+To repozytorium zawiera zaktualizowaną wersję rozwiązania do zarządzania kontami w AD oraz ich zasobami plikowymi. Wersja 0.2 wprowadza przede wszystkim elastyczność dzięki parametryzacji głównego skryptu oraz nowy, lżejszy silnik nadawania uprawnień.
 
 ## Architektura rozwiązania
 
-Skrypt działa sekwencyjnie i wykonuje operacje krok po kroku w oparciu o statyczne dane:
+Rozwiązanie przeszło ewolucję w stronę większej uniwersalności i szybkości działania:
 
-### 1. Generowanie i konfiguracja kont (AD)
+### 1. Parametryzacja i logika (AD)
 
-Skrypt pobiera najwyższy numer istniejącego konta (z prefiksem `user`) w jednostce organizacyjnej `OU=Users,DC=domain,DC=pl`, a następnie wylicza kolejne numery do utworzenia.
+Zamiast sztywno wpisanego kodu, skrypt zyskał pełną obsługę parametrów (CmdletBinding). Dzięki temu uruchamiający może zdefiniować w locie takie dane jak:
 
--   Tworzy konta domyślnie wyłączone (`-Enabled $false`) z twardo wpisanym hasłem startowym.
+-   Prefiks użytkownika (`$UserPrefix`), sufiks domeny (`$DomainSuffix`), docelowe OU (`$TargetOU`) oraz grupy (`$TargetGroups`).
     
--   Automatycznie przypisuje nowo utworzone konta do zdefiniowanych w skrypcie grup zabezpieczeń: `gg-group1` oraz `ug-group1`.
+-   Liczbę nowych kont do wygenerowania za pomocą parametru `-Count`.
     
-
-### 2. Struktura na serwerze plików (SMB)
-
-Skrypt weryfikuje zasoby bezpośrednio na serwerze o nazwie `vm01` w lokalizacji `\\vm01\HOME$\`.
-
--   Oblicza odpowiedni nadrzędny katalog (format `Kxxxx`), weryfikuje jego istnienie i w razie potrzeby go tworzy.
-    
--   Następnie tworzy w nim dedykowany folder docelowy dla użytkownika.
+-   Zmienne te trafiają do pętli, która dynamicznie oblicza numerację na podstawie istniejących już kont w środowisku.
     
 
-### 3. Uprawnienia do folderów (ACL)
+### 2. Silnik uprawnień (icacls)
 
-Nadawanie uprawnień do folderów domowych jest oddelegowane do skryptu `Give-PermissionsToFolder.ps1`.
+Pomocniczy skrypt `Give-PermissionsToFolder.ps1` został przepisany, aby działał wydajniej.
 
--   Wykorzystuje on metody `Get-Acl` oraz `Set-Acl` do utworzenia reguły typu `FileSystemAccessRule`.
+-   Zrezygnowano z problematycznych i topornych poleceń `Get-Acl` oraz `Set-Acl`.
     
--   Użytkownik otrzymuje uprawnienie "Modify" na poziomie wygenerowanego dla niego katalogu.
+-   Wdrożono narzędzie wiersza poleceń `icacls`, uruchamiane bezpośrednio na docelowym serwerze plików z wykorzystaniem `Invoke-Command`.
+    
+-   Do przekazania zmiennych lokalnych (np. nazwy usera) do zdalnej sesji skryptu wykorzystano modyfikator zakresu `$using:`.
     
 
-### 4. Udostępnianie w sieci
+### 3. Udostępnianie zasobów (SMB)
 
-Proces kończy się udostępnieniem udziału przez zdalne wywołanie na serwerze `vm01`.
-
--   Za pomocą polecenia `New-SmbShare` tworzony jest ukryty udział sieciowy z nazwą konta i symbolem dolara (np. `user0001$`).
-    
--   Na poziomie udziału nadawany jest dostęp "Change" dla grupy "Wszyscy".
-    
+Mechanizm zakładania udziałów sieciowych pozostał zintegrowany ze zdalnym wywołaniem, gdzie za pomocą `New-SmbShare` dla każdego folderu domowego powstaje automatycznie ukryty udział z pełnym dostępem na poziomie zasobu sieciowego ("Change" dla grupy "Wszyscy").
 
 ## Wymagania
 
 -   Moduł `ActiveDirectory`.
     
--   Serwer docelowy dla katalogów domowych.
+-   Aktywna usługa WinRM (umożliwiająca wykonanie `Invoke-Command`) na docelowym serwerze plików.
     
--   Poświadczenia administratora z uprawnieniami do dodawania kont w AD oraz zarządzania zasobami na serwerze docelowym.
+-   Odpowiednio skonfigurowane grupy docelowe w Active Directory.
     
 
 ## Użycie
 
-W pierwszej wersji wszystkie ścieżki i nazwy wpisane są na sztywno. Skrypt po prostu odpala się z głównego katalogu (nie przyjmuje on żadnych parametrów).
+Wywołaj skrypt, korzystając z nowych parametrów, aby dostosować liczbę kont i struktury do bieżących potrzeb.
 
 **Przykład wywołania:**
 
 PowerShell
 
 ```
-.\New-ADAccounts.ps1
+.\New-ADAccounts.ps1 -UserPrefix "user" -Count 10 -TargetGroups @("gg-group1","gg-group2")
 ```
 
 **Zastrzeżenie!** _Skrypt wprowadza zmiany w Active Directory. Mimo że został napisany z dbałością o błędy, używasz ich na własną odpowiedzialność! Przetestuj dokładnie jego działanie na środowisku testowym przed uruchomieniem go na produkcji :)_
 
-Autor: _Kacper Walczuk **(@walczukk)**_ | _kacper@walcz.uk_ | _walcz.uk_
+Autor: _Kacper Walczuk **(@walczukk)**_ | _kacper@walcz.uk_ | _[walcz.uk](https://walcz.uk/)_
