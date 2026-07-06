@@ -1,21 +1,51 @@
-Import-Module ActiveDirectory
+<#
+.SYNOPSIS
+Dodaje użytkowników "user" do Active Directory
 
-cd C:\scripts\New-ADAccounts
+.DESCRIPTION
+Skrypt pobiera ostatni numer identyfikatora "user", następnie na podstawie zdefiniowanej
+liczby, generuje ilość nowych kont użytkowników w AD oraz dodaje je do wskazanych grup.
+
+.EXAMPLE
+.\New-ADAccounts.ps1 -Count 10
+
+.NOTES
+    Wersja: 0.2
+    Autor: Kacper Walczuk | kacper@walcz.uk
+    Data publikacji: 2026-06-22
+
+    ZASTRZEŻENIE
+    Skrypt wprowadza zmiany w Active Directory. Mimo że został napisany z dbałością o błędy,
+    używasz ich na własną odpowiedzialność! Przetestuj dokładnie jego działanie na środowisku
+    testowym przed uruchomieniem go na produkcji :) 
+#>
+[CmdletBinding()]
+param (
+    [string]$UserPrefix = "user",
+    [string]$DomainSuffix = "domain.pl",
+    [string]$TargetOU = "OU=Users,DC=domain,DC=pl",
+    [string[]]$TargetGroups = @("gg-group1","gg-group2"),
+    [string]$LogPath = "C:\scripts\New-ADAccounts\logs",
+    [int]$Count = 20
+)
+
+Import-Module ActiveDirectory
 
 $credentials = Get-Credential -Message "Podaj poświadczenia administratorskie"
 
-$UserList = Get-ADUser -Filter 'Name -like "user*"' -SearchBase "OU=Users,DC=domain,DC=pl" | Sort-Object {[int]($_.Name -replace 'user', '')} | Select -ExpandProperty Name -Last 1
-$StartNumber =  [int]($UserList -replace 'user', '')
+$UserList = Get-ADUser -Filter "Name -like '$UserPrefix*'" -SearchBase $TargetOU | 
+    Sort-Object {[int]($_.Name -replace "$UserPrefix", '')} | 
+    Select -ExpandProperty Name -Last 1
+
+$StartNumber =  [int]($UserList -replace $UserPrefix, '')
 $DateFormat = Get-Date -Format 'yyyy_MM_dd'
+$LogFile = Join-Path -Path $LogPath -ChildPath "Accounts_Import_$DateFormat.log"
 
-$LogPath = "C:\scripts\New-ADAccounts\logs\Accounts_Import_$DateFormat.log"
-
-if (!(Test-Path "C:\scripts\New-ADAccounts\logs\")){
-    New-Item -ItemType Directory -Path "C:\scripts\New-ADAccounts\" -Name "logs"
+if (!(Test-Path -Path $LogPath)){
+    mkdir $LogPath
 }
 
-$NewNumber = 
-for ($i = 1; $i -lt 2; $i++) {
+$NewNumber = for ($i = 1; $i -le $Count; $i++) {
     $StartNumber + $i
 }
 
@@ -25,7 +55,7 @@ foreach ($num in $NewNumber) {
 
     Try {
         $OU = "OU=Users,DC=domain,DC=pl"
-        $Groups = @("gg-group1","ug-group1")
+        $Groups = @("gguser1-users","gguser1-proxytest")
         $SAMAccountName = "$NewUser"
         $UPN = "$NewUser@domain.pl"
         $Password = ConvertTo-SecureString "P@ssW0rdPassw0rD123" -AsPlainText -Force
