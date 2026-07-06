@@ -7,12 +7,12 @@ Skrypt pobiera ostatni numer identyfikatora "user", następnie na podstawie zdef
 liczby, generuje ilość nowych kont użytkowników w AD oraz dodaje je do wskazanych grup.
 
 .EXAMPLE
-.\New-ADAccounts_v1.2.ps1 -Count 10
+.\New-ADAccounts.ps1 -Count 15 -TargetFS "vm01"
 
 .NOTES
-    Wersja: 1.2
-    Autor: Kacper Walczuk | kacper@walcz.uk
-    Data publikacji: 2026-06-22
+    Wersja: 1.3
+    Autor: Kacper Walczuk
+    Data publikacji: 2026-06-24
 
     ZASTRZEŻENIE
     Skrypt wprowadza zmiany w Active Directory. Mimo że został napisany z dbałością o błędy,
@@ -24,10 +24,10 @@ param (
     [string]$UserPrefix = "user",
     [string]$DomainSuffix = "domain.pl",
     [string]$TargetOU = "OU=Users,DC=domain,DC=pl",
-    [string[]]$TargetGroups = @("gg-group1","gg-group2"),
+    [string[]]$TargetGroups = @("gg-group1","ug-group2"),
     [string]$LogPath = "C:\scripts\New-ADAccounts\logs",
     [string]$TargetFS = "vm01",
-    [int]$Count = 2
+    [int]$Count = 15
 )
 
 Import-Module ActiveDirectory
@@ -39,7 +39,7 @@ $UserList = Get-ADUser -Filter "Name -like '$UserPrefix*'" -SearchBase $TargetOU
     Select -ExpandProperty Name -Last 1
 
 $StartNumber =  [int]($UserList -replace $UserPrefix, '')
-$DateFormat = Get-Date -Format 'yyyy_MM_dd'
+$DateFormat = Get-Date -UFormat '%Y-%m-%d'
 $LogFile = Join-Path -Path $LogPath -ChildPath "Accounts_Import_$DateFormat.log"
 
 if (!(Test-Path -Path $LogPath)){
@@ -70,18 +70,21 @@ foreach ($num in $NewNumber) {
         $Password = ConvertTo-SecureString "P@ssW0rdPassw0rD123" -AsPlainText -Force
         Start-Sleep -Milliseconds 300
 
-        New-ADUser -Credential $credentials `
-                   -Name $NewUser `
-                   -SAMAccountName $NewUser `
-                   -Path $TargetOU `
-                   -Enabled $false `
-                   -AccountPassword $Password `
-                   -UserPrincipalName $NewUser@$DomainSuffix `
-                   -Description $NewUser `
-                   -ScriptPath "script.bat" `
-                   -HomeDrive "H:" `
-                   -HomeDirectory "\\$TargetFS\$NewUser$" `
-                   #-WhatIf
+        $CreatedUser = New-ADUser -Credential $credentials `
+                -Name $NewUser `
+                -SAMAccountName $NewUser `
+                -Path $TargetOU `
+                -Enabled $false `
+                -AccountPassword $Password `
+                -UserPrincipalName $NewUser@$DomainSuffix `
+                -Description $NewUser `
+                -ScriptPath "script.bat" `
+                -HomeDrive "H:" `
+                -HomeDirectory "\\$TargetFS\$NewUser$" `
+                -PassThru
+                #-WhatIf
+        
+                $CreatedUserSID = $CreatedUser.SID.Value
 
         Write-Host "Dodałem $NewUser" -ForegroundColor Green
         "$($DateFormat): Dodano $NewUser" | Out-File -FilePath $LogFile -Append
@@ -90,53 +93,37 @@ foreach ($num in $NewNumber) {
         #dodanie użytkownika do grup
         foreach ($group in $TargetGroups) {
             Add-ADGroupMember -Credential $credentials -Identity $group -Members $NewUser #-WhatIf
-            Write-Host "Dodałem $NewUser do grupy: $group" -BackgroundColor Cyan
+            Write-Host "Dodałem $NewUser do grupy: $group" -ForegroundColor Cyan
             "$($DateFormat): Dodano $NewUser do grupy: $group" | Out-File -FilePath $LogFile -Append
         }
 
         #weryfikacja istnienia folderu Kxxxx na FileServerze
-        $HomeDrivePath = "\\$TargetFS\HOME$\"
         $ParentSuffix = [Math]::Floor($num / 100) * 100
         $HomeDriveFormat = "K{0:D4}" -f [int]$ParentSuffix        
-        $HomeDriveChildPath = Join-Path -Path $HomeDrivePath -ChildPath $HomeDriveFormat
+   
+        . "$PSScriptRoot\Give-PermissionsToFolder_v0.3.ps1"
+        Grant-PermissionsToFolder `
+            -HomeDriveFormat $HomeDriveFormat `
+            -CreatedUserSID $CreatedUserSID `
+            -NewUser $NewUser `
+            -credentials $credentials `
+            -TargetFS $TargetFS
+        Start-Sleep -Seconds 1
 
-        if (Test-Path $HomeDriveChildPath -PathType Container) {
-            #jeśli istnieje - nie rób nic
-        } else {
-            Write-Host "Nie istnieje $HomeDriveChildPath - tworzę nowy folder..."
-            Start-Sleep -Milliseconds 500
+        Add-SharingToFolder `
+            -HomeDriveFormat $HomeDriveFormat `
+            -NewUser $NewUser `
+            -credentials $credentials `
+            -TargetFS $TargetFS
 
-            New-Item -Path $HomeDrivePath -Name $HomeDriveFormat -ItemType Directory
-            Write-Host "Utworzyłem $HomeDriveChildPath!"
+        Write-Host "Utworzyłem folder $NewUser!"
+        Start-Sleep -Seconds 1
 
-        }
-
-        if (Test-Path $HomeDriveChildPath -PathType Container) {
-            Write-Host "Tworzę folder $NewUser..."
-            Start-Sleep -Milliseconds 500
-
-            New-Item -Path $HomeDriveChildPath -Name $NewUser -ItemType Directory
-            Start-Sleep -Seconds 2
-
-            . "$PSScriptRoot\Give-PermissionsToFolder.ps1"
-
-            Grant-PermissionsToFolder `
-                -HomeDrivePath $HomeDrivePath `
-                -HomeDriveFormat $HomeDriveFormat `
-                -NewUser $NewUser `
-                -credentials $credentials `
-                -TargetFS $TargetFS
-
-            Start-Sleep -Seconds 1
-
-            Add-SharingToFolder `
-                -HomeDriveFormat $HomeDriveFormat `
-                -NewUser $NewUser `
-                -credentials $credentials `
-                -TargetFS $TargetFS
-
-            Write-Host "Utworzyłem folder $NewUser!"
-        }
+        . "$PSScriptRoot\Set-Quotas.ps1"
+        Set-Quotas `
+        -HomeDriveFormat $HomeDriveFormat `
+        -credentials $credentials `
+        -TargetFS $TargetFS
     }
     Catch {
         $ErrorMessage = $_.Exception.Message
