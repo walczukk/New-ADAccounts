@@ -1,58 +1,58 @@
 # 👤 New-ADAccounts (SysOps)
 
-![PowerShell](https://img.shields.io/badge/PowerShell-5.1-blue?logo=powershell) ![Active Directory](https://img.shields.io/badge/ActiveDirectory-Module-green) ![v0.2](https://img.shields.io/badge/wersja-0.2-e45959)
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1-blue?logo=powershell) ![Active Directory](https://img.shields.io/badge/ActiveDirectory-Module-green) ![v1.2](https://img.shields.io/badge/wersja-1.2-e45959)
 
-To repozytorium zawiera zaktualizowaną wersję rozwiązania do zarządzania kontami w AD oraz ich zasobami plikowymi. Wersja 0.2 wprowadza przede wszystkim elastyczność dzięki parametryzacji głównego skryptu oraz nowy, lżejszy silnik nadawania uprawnień.
+
+To repozytorium zawiera zaawansowaną wersję rozwiązania do zautomatyzowanego tworzenia kont w Active Directory. Wersja 1.2 wprowadza dynamiczne zarządzanie docelowym serwerem plików oraz inteligentne mechanizmy radzenia sobie z problemami replikacji po stronie domeny.
 
 ## Architektura rozwiązania
 
-Rozwiązanie przeszło ewolucję w stronę większej uniwersalności i szybkości działania:
+Skrypt został zoptymalizowany pod kątem stabilności i działania w rozproszonym środowisku:
 
-### 1. Parametryzacja i logika (AD)
+### 1. Weryfikacja środowiska (PSRemoting)
 
-Zamiast sztywno wpisanego kodu, skrypt zyskał pełną obsługę parametrów (CmdletBinding). Dzięki temu uruchamiający może zdefiniować w locie takie dane jak:
+Zanim skrypt zacznie modyfikować Active Directory, wykonuje prewencyjny test połączenia.
 
--   Prefiks użytkownika (`$UserPrefix`), sufiks domeny (`$DomainSuffix`), docelowe OU (`$TargetOU`) oraz grupy (`$TargetGroups`).
+-   Używając polecenia `Invoke-Command`, skrypt próbuje wykonać proste zapytanie na docelowym serwerze plików (`$TargetFS`).
     
--   Liczbę nowych kont do wygenerowania za pomocą parametru `-Count`.
-    
--   Zmienne te trafiają do pętli, która dynamicznie oblicza numerację na podstawie istniejących już kont w środowisku.
+-   Jeśli serwer nie ma włączonej funkcji zdalnego zarządzania (WinRM) lub nie odpowiada, skrypt rzuca błędem i przerywa działanie, zapobiegając utworzeniu "osieroconych" kont w AD bez folderów domowych.
     
 
-### 2. Silnik uprawnień (icacls)
+### 2. Pełna parametryzacja serwera docelowego
 
-Pomocniczy skrypt `Give-PermissionsToFolder.ps1` został przepisany, aby działał wydajniej.
+Usunięto twarde powiązania z serwerem `vm01`.
 
--   Zrezygnowano z problematycznych i topornych poleceń `Get-Acl` oraz `Set-Acl`.
+-   Dodano parametr `$TargetFS`, który pozwala skierować tworzenie struktur katalogów na dowolny serwer plików w domenie.
     
--   Wdrożono narzędzie wiersza poleceń `icacls`, uruchamiane bezpośrednio na docelowym serwerze plików z wykorzystaniem `Invoke-Command`.
-    
--   Do przekazania zmiennych lokalnych (np. nazwy usera) do zdalnej sesji skryptu wykorzystano modyfikator zakresu `$using:`.
+-   Skrypty pomocnicze również przyjmują ten parametr, wykorzystując `Invoke-Command` z argumentem `-ArgumentList` do bezpiecznego przekazywania zmiennych do zdalnej sesji.
     
 
-### 3. Udostępnianie zasobów (SMB)
+### 3. Obejście opóźnień replikacji AD (icacls Retry Logic)
 
-Mechanizm zakładania udziałów sieciowych pozostał zintegrowany ze zdalnym wywołaniem, gdzie za pomocą `New-SmbShare` dla każdego folderu domowego powstaje automatycznie ukryty udział z pełnym dostępem na poziomie zasobu sieciowego ("Change" dla grupy "Wszyscy").
+Głównym problemem podczas tworzenia kont i błyskawicznego przypisywania uprawnień (ACL) był błąd 1332 (brak mapowania między nazwami kont a identyfikatorami zabezpieczeń).
+
+-   W skrypcie `Give-PermissionsToFolder.ps1` zaimplementowano mechanizm pętli `do...while`.
+    
+-   W przypadku wystąpienia błędu z kodem 1332, skrypt usypia się na 3 sekundy i ponawia próbę nadania uprawnień (maksymalnie 5 iteracji), dając kontrolerom domeny czas na zreplikowanie nowego obiektu do serwera plików.
+    
 
 ## Wymagania
 
 -   Moduł `ActiveDirectory`.
     
--   Aktywna usługa WinRM (umożliwiająca wykonanie `Invoke-Command`) na docelowym serwerze plików.
-    
--   Odpowiednio skonfigurowane grupy docelowe w Active Directory.
+-   Aktywna usługa WinRM (umożliwiająca wykonanie `Invoke-Command`) na serwerze wskazanym w parametrze `$TargetFS`.
     
 
 ## Użycie
 
-Wywołaj skrypt, korzystając z nowych parametrów, aby dostosować liczbę kont i struktury do bieżących potrzeb.
+Wywołaj skrypt z odpowiednimi parametrami, definiując docelowy serwer plików oraz liczbę kont do wygenerowania.
 
 **Przykład wywołania:**
 
 PowerShell
 
 ```
-.\New-ADAccounts.ps1 -UserPrefix "user" -Count 10 -TargetGroups @("gg-group1","gg-group2")
+.\New-ADAccounts.ps1 -Count 2 -TargetFS "FileServer02"
 ```
 
 **Zastrzeżenie!** _Skrypt wprowadza zmiany w Active Directory. Mimo że został napisany z dbałością o błędy, używasz ich na własną odpowiedzialność! Przetestuj dokładnie jego działanie na środowisku testowym przed uruchomieniem go na produkcji :)_
