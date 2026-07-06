@@ -1,58 +1,65 @@
 # 👤 New-ADAccounts (SysOps)
 
-![PowerShell](https://img.shields.io/badge/PowerShell-5.1-blue?logo=powershell) ![Active Directory](https://img.shields.io/badge/ActiveDirectory-Module-green) ![v1.2](https://img.shields.io/badge/wersja-1.2-e45959)
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1-blue?logo=powershell) ![Active Directory](https://img.shields.io/badge/ActiveDirectory-Module-green) ![v1.3](https://img.shields.io/badge/wersja-1.3-e45959)
 
-
-To repozytorium zawiera zaawansowaną wersję rozwiązania do zautomatyzowanego tworzenia kont w Active Directory. Wersja 1.2 wprowadza dynamiczne zarządzanie docelowym serwerem plików oraz inteligentne mechanizmy radzenia sobie z problemami replikacji po stronie domeny.
+To repozytorium posiada zoptymalizowaną wersję rozwiązania do masowego tworzenia kont w środowisku Active Directory. Wersja 1.3 całkowicie eliminuje problemy z opóźnieniami replikacji AD dzięki operowaniu na identyfikatorach SID oraz wprowadza zautomatyzowane zarządzanie przestrzenią dyskową za pomocą FSRM.
 
 ## Architektura rozwiązania
 
-Skrypt został zoptymalizowany pod kątem stabilności i działania w rozproszonym środowisku:
+Logika skryptu opiera się na wydajnych operacjach i natychmiastowym działaniu:
 
-### 1. Weryfikacja środowiska (PSRemoting)
+### 1. Zrzut SID (Active Directory)
 
-Zanim skrypt zacznie modyfikować Active Directory, wykonuje prewencyjny test połączenia.
+Największym wąskim gardłem wcześniejszych wersji było mapowanie nazwy użytkownika na obiekt w domenie podczas nadawania uprawnień. Zostało to całkowicie zlikwidowane.
 
--   Używając polecenia `Invoke-Command`, skrypt próbuje wykonać proste zapytanie na docelowym serwerze plików (`$TargetFS`).
+-   Skrypt wykorzystuje przełącznik `-PassThru` podczas wywoływania polecenia `New-ADUser`.
     
--   Jeśli serwer nie ma włączonej funkcji zdalnego zarządzania (WinRM) lub nie odpowiada, skrypt rzuca błędem i przerywa działanie, zapobiegając utworzeniu "osieroconych" kont w AD bez folderów domowych.
+-   Pozwala to na natychmiastowe przechwycenie utworzonego obiektu do zmiennej `$CreatedUser` i wyodrębnienie z niego unikalnego identyfikatora: `$CreatedUser.SID.Value`.
     
-
-### 2. Pełna parametryzacja serwera docelowego
-
-Usunięto twarde powiązania z serwerem `vm01`.
-
--   Dodano parametr `$TargetFS`, który pozwala skierować tworzenie struktur katalogów na dowolny serwer plików w domenie.
-    
--   Skrypty pomocnicze również przyjmują ten parametr, wykorzystując `Invoke-Command` z argumentem `-ArgumentList` do bezpiecznego przekazywania zmiennych do zdalnej sesji.
+-   Konto zostaje utworzone (domyślnie ze statusem `Enabled $false`) i trafia do zdefiniowanych grup zabezpieczeń (np. `gg-group1`).
     
 
-### 3. Obejście opóźnień replikacji AD (icacls Retry Logic)
+### 2. Kuloodporne uprawnienia (Bypass replikacji)
 
-Głównym problemem podczas tworzenia kont i błyskawicznego przypisywania uprawnień (ACL) był błąd 1332 (brak mapowania między nazwami kont a identyfikatorami zabezpieczeń).
+Pomocniczy skrypt `Give-PermissionsToFolder.ps1` został przeprojektowany do pracy z identyfikatorem SID zamiast nazwy użytkownika SAMAccountName.
 
--   W skrypcie `Give-PermissionsToFolder.ps1` zaimplementowano mechanizm pętli `do...while`.
+-   Z kodu wyleciała pętla `do...while`, która sztucznie opóźniała działanie skryptu w oczekiwaniu na replikację.
     
--   W przypadku wystąpienia błędu z kodem 1332, skrypt usypia się na 3 sekundy i ponawia próbę nadania uprawnień (maksymalnie 5 iteracji), dając kontrolerom domeny czas na zreplikowanie nowego obiektu do serwera plików.
+-   Polecenie `icacls` przyjmuje teraz bezpośrednio numer SID poprzedzony gwiazdką: `icacls $a /grant "*${CreatedUserSID}:(OI)(CI)M" /t`.
+    
+-   Użycie gwiazdki `*` zmusza system Windows do ominięcia weryfikacji nazwy w AD (która mogłaby się nie udać z powodu braku replikacji) i bezpośredniego wbicia uprawnienia RWX na poziomie systemu plików.
+    
+-   Proces kończy się wykreowaniem ukrytego udziału dla użytkownika z dostępem dla "Wszyscy".
+    
+
+### 3. Zarządzanie przestrzenią dyskową (FSRM Quotas)
+
+Do zestawu narzędzi dołączył nowy moduł: `Set-Quotas.ps1`.
+
+-   Po utworzeniu pełnej struktury, główny skrypt wywołuje zdalnie za pomocą `Invoke-Command` konfigurację limitów dyskowych na docelowym serwerze plików `$TargetFS`.
+    
+-   Skrypt sprawdza za pomocą `Get-FSRMAutoQuota`, czy dla katalogu nadrzędnego (np. `H:\HOME\K0000`) istnieje już przypisany limit.
+    
+-   Jeśli limitu brak, poleceniem `New-FsrmAutoQuota` aplikowany jest gotowy szablon o nazwie "Quota limit for HOME". Gwarantuje to, że zasoby dyskowe serwera nie zostaną zapchane przez nowych użytkowników.
     
 
 ## Wymagania
 
 -   Moduł `ActiveDirectory`.
     
--   Aktywna usługa WinRM (umożliwiająca wykonanie `Invoke-Command`) na serwerze wskazanym w parametrze `$TargetFS`.
+-   Aktywna usługa WinRM (`Enable-PSRemoting`) na serwerze wskazanym w parametrze `$TargetFS`.
+    
+-   Zainstalowana i skonfigurowana rola **FSRM (File Server Resource Manager)** na docelowym serwerze plików, posiadająca szablon "Quota limit for HOME".
     
 
 ## Użycie
 
-Wywołaj skrypt z odpowiednimi parametrami, definiując docelowy serwer plików oraz liczbę kont do wygenerowania.
+Wywołaj skrypt, definiując docelowy serwer plików i liczbę kont. Cały proces (wraz z nadaniem uprawnień i limitów dyskowych) wykona się błyskawicznie w ramach jednej operacji.
 
 **Przykład wywołania:**
 
-PowerShell
-
-```
-.\New-ADAccounts.ps1 -Count 2 -TargetFS "FileServer02"
+```powershell
+.\New-ADAccounts.ps1 -Count 15 -TargetFS "vm01"
 ```
 
 **Zastrzeżenie!** _Skrypt wprowadza zmiany w Active Directory. Mimo że został napisany z dbałością o błędy, używasz ich na własną odpowiedzialność! Przetestuj dokładnie jego działanie na środowisku testowym przed uruchomieniem go na produkcji :)_
