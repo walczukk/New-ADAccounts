@@ -2,8 +2,8 @@ Import-Module ActiveDirectory
 
 function Grant-PermissionsToFolder {
         param (
-            [string]$HomeDrivePath,
             [string]$HomeDriveFormat,
+            [string]$CreatedUserSID,
             [string]$NewUser,
             [string]$TargetFS,
             [pscredential]$credentials
@@ -11,32 +11,19 @@ function Grant-PermissionsToFolder {
     Try {
         Invoke-Command -ComputerName $TargetFS -Credential $credentials -ScriptBlock {
         param (
-            $HomeDrivePath,
             $HomeDriveFormat,
+            $CreatedUserSID,
             $NewUser
         )
         $a = "H:\HOME\$HomeDriveFormat\$NewUser"
-        $b = "$NewUser"
-
-        $retry = 0
-
-        do {
-            icacls $a /grant "${b}:(OI)(CI)M" /t
-
-            if ($LASTEXITCODE -eq 0) {
-                break
-            }
-
-            Write-Host "AD w trakcie replikacji $b (błąd $LASTEXITCODE)" -ForegroundColor Yellow
-            Start-Sleep -Seconds 3
-            $retry++
-        } while ($retry -lt 5 -and $LASTEXITCODE -eq 1332)
+        New-Item -Path $a -ItemType Directory -Force
+        icacls $a /grant "*${CreatedUserSID}:(OI)(CI)M" /t #uprawnienia RWX
 
         if ($LASTEXITCODE -ne 0) {
             Throw "icacls: wystąpił błąd z kodem $LASTEXITCODE."
         }
 
-    } -ArgumentList $HomeDrivePath, $HomeDriveFormat, $NewUser, $TargetFS
+    } -ArgumentList $HomeDriveFormat, $CreatedUserSID, $NewUser, $TargetFS
 } Catch {
     Write-Host "BŁĄD $($_.Exception.Message)" -BackgroundColor Red
 }
